@@ -1,0 +1,578 @@
+0a1,2
+> // verifast_options{ignore_unwind_paths skip_specless_fns}
+> 
+12a15,18
+> // This is a slightly tweaked version of https://github.com/rust-lang/rust/blob/c290e9de32e8ba6a673ef125fde40eadd395d170/library/alloc/src/collections/linked_list.rs
+> 
+> #![allow(internal_features)]
+> #![feature(staged_api)]
+13a20,29
+> #![feature(rustc_attrs)]
+> #![feature(dropck_eyepatch)]
+> #![feature(specialization)]
+> #![feature(allocator_api)]
+> #![feature(extend_one)]
+> #![feature(exact_size_is_empty)]
+> #![feature(hasher_prefixfree_extras)]
+> #![feature(box_into_inner)]
+> 
+> use std as core;
+15a32
+> use core::fmt;
+16a34
+> use core::iter::FromIterator;
+18a37
+> use core::mem;
+20d38
+< use core::{fmt, mem};
+22,24c40,42
+< use super::SpecExtend;
+< use crate::alloc::{Allocator, Global};
+< use crate::boxed::Box;
+---
+> use std::alloc::{Allocator, Global};
+> use std::boxed::Box;
+> 
+28a47,50
+> trait SpecExtend<I> {
+>     fn spec_extend(&mut self, iter: I);
+> }
+> 
+48c70
+< #[cfg_attr(not(test), rustc_diagnostic_item = "LinkedList")]
+---
+> //#[cfg_attr(not(test), rustc_diagnostic_item = "LinkedList")]
+156c178,179
+<     fn new(element: T) -> Self {
+---
+>     unsafe fn new(element: T) -> Self
+>     {
+160,161c183,185
+<     fn into_element<A: Allocator>(self: Box<Self, A>) -> T {
+<         self.element
+---
+>     unsafe fn into_element<A: Allocator>(self: Box<Self, A>) -> T
+>     {
+>         Box::into_inner(self).element // self.element
+173c197,198
+<     unsafe fn push_front_node(&mut self, node: NonNull<Node<T>>) {
+---
+>     unsafe fn push_front_node(&mut self, node: NonNull<Node<T>>)
+>     {
+182c207,209
+<                 None => self.tail = node,
+---
+>                 None => {
+>                     self.tail = node
+>                 }
+184c211,213
+<                 Some(head) => (*head.as_ptr()).prev = node,
+---
+>                 Some(head) => {
+>                     (*head.as_ptr()).prev = node;
+>                 }
+194c223,224
+<     fn pop_front_node(&mut self) -> Option<Box<Node<T>, &A>> {
+---
+>     unsafe fn pop_front_node<'a>(&'a mut self) -> Option<Box<Node<T>, &'a A>>
+>     {
+197,199c227,231
+<         self.head.map(|node| unsafe {
+<             let node = Box::from_raw_in(node.as_ptr(), &self.alloc);
+<             self.head = node.next;
+---
+>         match self.head {
+>             None => None,
+>             Some(node) => unsafe {
+>                 self.head = (*node.as_ptr()).next;
+>                 let node = Box::from_raw_in(node.as_ptr(), &self.alloc);
+208,209c240,242
+<             node
+<         })
+---
+>                 Some(node)
+>             }
+>         }
+242,244c275,279
+<         self.tail.map(|node| unsafe {
+<             let node = Box::from_raw_in(node.as_ptr(), &self.alloc);
+<             self.tail = node.prev;
+---
+>         match self.tail {
+>             None => None,
+>             Some(node) => unsafe {
+>                 let node = Box::from_raw_in(node.as_ptr(), &self.alloc);
+>                 self.tail = node.prev;
+253,254c288,290
+<             node
+<         })
+---
+>                 Some(node)
+>             }
+>         }
+264c300,301
+<     unsafe fn unlink_node(&mut self, mut node: NonNull<Node<T>>) {
+---
+>     unsafe fn unlink_node(&mut self, mut node: NonNull<Node<T>>)
+>     {
+269c306,308
+<             Some(prev) => unsafe { (*prev.as_ptr()).next = node.next },
+---
+>             Some(prev) => unsafe {
+>                 (*prev.as_ptr()).next = node.next;
+>             },
+271c310,312
+<             None => self.head = node.next,
+---
+>             None => {
+>                 self.head = node.next
+>             }
+275c316,318
+<             Some(next) => unsafe { (*next.as_ptr()).prev = node.prev },
+---
+>             Some(next) => unsafe {
+>                 (*next.as_ptr()).prev = node.prev;
+>             },
+277c320,323
+<             None => self.tail = node.prev,
+---
+>             None => {
+>                 self.tail = node.prev;
+>                 
+>             }
+409c455
+<                 alloc: self.alloc.clone(),
+---
+>                 alloc: clone_allocator(&self.alloc),
+416d461
+< 
+419c464,466
+<             mem::replace(self, LinkedList::new_in(self.alloc.clone()))
+---
+>             let alloc = clone_allocator(&self.alloc);
+>             let r = LinkedList::new_in(alloc);
+>             mem::replace(self, r)
+423a471,475
+> unsafe fn clone_allocator<'a, A: Allocator + Clone>(alloc: &'a A) -> A
+> {
+>     alloc.clone()      //~allow_dead_code
+> }                      //~allow_dead_code
+> 
+447,448c499,502
+<     pub const fn new() -> Self {
+<         LinkedList { head: None, tail: None, len: 0, alloc: Global, marker: PhantomData }
+---
+>     pub const fn new() -> Self
+>     {
+>         let r = LinkedList { head: None, tail: None, len: 0, alloc: Global, marker: PhantomData };
+>         r
+516,517c570,573
+<     pub const fn new_in(alloc: A) -> Self {
+<         LinkedList { head: None, tail: None, len: 0, alloc, marker: PhantomData }
+---
+>     pub const fn new_in(alloc: A) -> Self
+>     {
+>         let r = LinkedList { head: None, tail: None, len: 0, alloc, marker: PhantomData };
+>         r
+540,541c596,599
+<     pub fn iter(&self) -> Iter<'_, T> {
+<         Iter { head: self.head, tail: self.tail, len: self.len, marker: PhantomData }
+---
+>     pub fn iter<'a>(&'a self) -> Iter<'a, T>
+>     {
+>         let r = Iter { head: self.head, tail: self.tail, len: self.len, marker: PhantomData };
+>         r
+589,590c647,650
+<     pub fn cursor_front_mut(&mut self) -> CursorMut<'_, T, A> {
+<         CursorMut { index: 0, current: self.head, list: self }
+---
+>     pub fn cursor_front_mut<'a>(&'a mut self) -> CursorMut<'a, T, A>
+>     {
+>         let r = CursorMut { index: 0, current: self.head, list: self };
+>         r
+609,610c669,672
+<     pub fn cursor_back_mut(&mut self) -> CursorMut<'_, T, A> {
+<         CursorMut { index: self.len.checked_sub(1).unwrap_or(0), current: self.tail, list: self }
+---
+>     pub fn cursor_back_mut<'a>(&'a mut self) -> CursorMut<'a, T, A>
+>     {
+>         let r = CursorMut { index: self.len.checked_sub(1).unwrap_or(0), current: self.tail, list: self };
+>         r
+685c747,748
+<     pub fn clear(&mut self) {
+---
+>     pub fn clear(&mut self)
+>     {
+688c751,752
+<         drop(LinkedList {
+---
+>         {
+>             let ll = LinkedList {
+691c755
+<             len: mem::take(&mut self.len),
+---
+>                 len: mem::replace(&mut self.len, 0), //mem::take(&mut self.len),
+694c758,760
+<         });
+---
+>             };
+>             drop(ll);
+>         }
+846,849c912,913
+<     pub fn push_front(&mut self, elt: T) {
+<         let node = Box::new_in(Node::new(elt), &self.alloc);
+<         let node_ptr = NonNull::from(Box::leak(node));
+<         // SAFETY: node_ptr is a unique pointer to a node we boxed with self.alloc and leaked
+---
+>     pub fn push_front(&mut self, elt: T)
+>     {
+850a915,918
+>             let node0 = Node::new(elt);
+>         let node = Box::new_in(node0, &self.alloc);
+>             let node_ptr = NonNull::new_unchecked(Box::leak(node) as *mut Node<T>); //NonNull::from(Box::leak(node));
+>         // SAFETY: node_ptr is a unique pointer to a node we boxed with self.alloc and leaked
+875,876c943,955
+<     pub fn pop_front(&mut self) -> Option<T> {
+<         self.pop_front_node().map(Node::into_element)
+---
+>     pub fn pop_front(&mut self) -> Option<T>
+>     {
+>         unsafe {
+>             match self.pop_front_node() { //.map(Node::into_element)
+>                 None => {
+>                     None
+>                 }
+>                 Some(node) => {
+>                     let r = Some(node.into_element());
+>                     r
+>                 }
+>             }
+>         }
+895a975
+>         unsafe {
+899d978
+<         unsafe {
+922c1001,1006
+<         self.pop_back_node().map(Node::into_element)
+---
+>         unsafe {
+>             match self.pop_back_node() { //.map(Node::into_element)
+>                 None => None,
+>                 Some(node) => Some(node.into_element())
+>             }
+>         }
+955c1039,1040
+<         let len = self.len();
+---
+>         unsafe {
+>             let len = self.len;
+958c1043,1044
+<             return mem::replace(self, Self::new_in(self.alloc.clone()));
+---
+>                 let alloc1 = clone_allocator(&self.alloc);
+>                 return mem::replace(self, Self::new_in(alloc1));
+960c1046,1047
+<             return Self::new_in(self.alloc.clone());
+---
+>                 let alloc2 = clone_allocator(&self.alloc);
+>                 return Self::new_in(alloc2);
+964a1052,1053
+>             let mut iter;
+>             let mut i;
+966,973c1055,1064
+<             let mut iter = self.iter_mut();
+<             // instead of skipping using .skip() (which creates a new struct),
+<             // we skip manually so we can access the head field without
+<             // depending on implementation details of Skip
+<             for _ in 0..at - 1 {
+<                 iter.next();
+<             }
+<             iter.head
+---
+>                 iter = self.head;
+>                 i = 0;
+>                 loop {
+>                     if i == at - 1 {
+>                         break;
+>                     }
+>                     iter = (*iter.unwrap_unchecked().as_ptr()).next;
+>                     i += 1;
+>                 }
+>                 iter
+976,980c1067,1076
+<             let mut iter = self.iter_mut();
+<             for _ in 0..len - 1 - (at - 1) {
+<                 iter.next_back();
+<             }
+<             iter.tail
+---
+>                 iter = self.tail;
+>                 i = 0;
+>                 loop { // for _ in 0..len - 1 - (at - 1) {
+>                     if i == len - 1 - (at - 1) {
+>                         break;
+>                     }
+>                     iter = (*iter.unwrap_unchecked().as_ptr()).prev;
+>                     i += 1;
+>                 }
+>                 iter
+982a1079
+>         }
+1085c1182
+<     /// In other words, remove all elements `e` for which `f(&mut e)` returns false.
+---
+>     /// In other words, remove all elements `e` for which `f(&e)` returns false.
+1156c1253
+<     pub fn extract_if<F>(&mut self, filter: F) -> ExtractIf<'_, T, F, A>
+---
+>     pub fn extract_if<'a, F>(&'a mut self, filter: F) -> ExtractIf<'a, T, F, A>
+1159a1257
+>         
+1164c1262,1264
+<         ExtractIf { list: self, it, pred: filter, idx: 0, old_len }
+---
+> 
+>         let r = ExtractIf { list: self, it, pred: filter, idx: 0, old_len };
+>         r
+1168,1170d1267
+< #[stable(feature = "rust1", since = "1.0.0")]
+< unsafe impl<#[may_dangle] T, A: Allocator> Drop for LinkedList<T, A> {
+<     fn drop(&mut self) {
+1174a1272
+>         unsafe {
+1179a1278
+> }
+1180a1280,1284
+> #[stable(feature = "rust1", since = "1.0.0")]
+> unsafe impl<#[may_dangle] T, A: Allocator> Drop for LinkedList<T, A> {
+>     fn drop(&mut self)
+>     {
+>         unsafe {
+1183c1287,1293
+<         while guard.0.pop_front_node().is_some() {}
+---
+>             loop {
+>                 match guard.0.pop_front() {
+>                     None => { break; }
+>                     Some(element) => {
+>                     }
+>                 }
+>             }
+1184a1295
+>         }
+1193c1304,1305
+<     fn next(&mut self) -> Option<&'a T> {
+---
+>     fn next(&mut self) -> Option<&'a T>
+>     {
+1197c1309,1313
+<             self.head.map(|node| unsafe {
+---
+>             match self.head { //.map(|node| unsafe {
+>                 None => {
+>                     None
+>                 }
+>                 Some(node) => unsafe {
+1199,1203c1315,1322
+<                 let node = &*node.as_ptr();
+<                 self.len -= 1;
+<                 self.head = node.next;
+<                 &node.element
+<             })
+---
+>                     let node = node.as_ptr(); //&*node_.as_ptr();
+>                     let len = self.len;
+>                     self.len = len - 1;
+>                     self.head = (*node).next;
+>                     let r = &(*node).element;
+>                     Some(r)
+>                 }
+>             }
+1497,1504d1615
+< 
+<     /// Provides a reference to the cursor's parent list.
+<     #[must_use]
+<     #[inline(always)]
+<     #[unstable(feature = "linked_list_cursors", issue = "58533")]
+<     pub fn as_list(&self) -> &'a LinkedList<T, A> {
+<         self.list
+<     }
+1525c1636,1637
+<     pub fn move_next(&mut self) {
+---
+>     pub fn move_next(&mut self)
+>     {
+1535c1647
+<                 self.current = current.as_ref().next;
+---
+>                 self.current = (*current.as_ptr()).next; //current.as_ref().next;
+1538c1650
+<         }
+---
+>         };
+1547c1659,1660
+<     pub fn move_prev(&mut self) {
+---
+>     pub fn move_prev(&mut self)
+>     {
+1552c1665
+<                 self.index = self.list.len().checked_sub(1).unwrap_or(0);
+---
+>                 self.index = self.list.len.checked_sub(1).unwrap_or(0);
+1556,1557c1669,1677
+<                 self.current = current.as_ref().prev;
+<                 self.index = self.index.checked_sub(1).unwrap_or_else(|| self.list.len());
+---
+>                 self.current = (*current.as_ptr()).prev; //current.as_ref().prev;
+>                 match self.index.checked_sub(1) { // self.index = self.index.checked_sub(1).unwrap_or_else(|| self.list.len());
+>                     None => {
+>                         self.index = self.list.len;
+>                     }
+>                     Some(index1) => {
+>                         self.index = index1;
+>                     }
+>                 }
+1569,1570c1689,1700
+<     pub fn current(&mut self) -> Option<&mut T> {
+<         unsafe { self.current.map(|current| &mut (*current.as_ptr()).element) }
+---
+>     pub fn current<'b>(&'b mut self) -> Option<&'b mut T>
+>     {
+>         unsafe {
+>             match self.current { //self.current.map(|current| &mut (*current.as_ptr()).element)
+>                 None => {
+>                     None
+>                 }
+>                 Some(current) => {
+>                     Some(&mut (*current.as_ptr()).element)
+>                 }
+>             }
+>         }
+1615,1626d1744
+< 
+<     /// Provides a read-only reference to the cursor's parent list.
+<     ///
+<     /// The lifetime of the returned reference is bound to that of the
+<     /// `CursorMut`, which means it cannot outlive the `CursorMut` and that the
+<     /// `CursorMut` is frozen for the lifetime of the reference.
+<     #[must_use]
+<     #[inline(always)]
+<     #[unstable(feature = "linked_list_cursors", issue = "58533")]
+<     pub fn as_list(&self) -> &LinkedList<T, A> {
+<         self.list
+<     }
+1722,1725c1840,1849
+<     pub fn remove_current(&mut self) -> Option<T> {
+<         let unlinked_node = self.current?;
+<         unsafe {
+<             self.current = unlinked_node.as_ref().next;
+---
+>     pub fn remove_current(&mut self) -> Option<T>
+>     {
+>         //let unlinked_node = self.current?;
+>         match self.current {
+>             None => {
+>                 None
+>             }
+>             Some(unlinked_node) => unsafe {
+>                 
+>                 self.current = (*unlinked_node.as_ptr()).next; //unlinked_node.as_ref().next;
+1727,1728c1851,1854
+<             let unlinked_node = Box::from_raw_in(unlinked_node.as_ptr(), &self.list.alloc);
+<             Some(unlinked_node.element)
+---
+>                 let unlinked_node = Box::from_raw_in(unlinked_node.as_ptr(), &self.list.alloc);
+>                 let r = Some(Box::into_inner(unlinked_node).element); // Some(unlinked_node_.element)
+>                 r
+>             }
+1951a2078,2082
+> fn call_pred<T, F: FnMut(&mut T) -> bool>(f: &mut F, element: &mut T) -> bool
+> {
+>     f(element) //~allow_dead_code
+> } //~allow_dead_code
+> 
+1953c2084
+< impl<T, F, A: Allocator> Iterator for ExtractIf<'_, T, F, A>
+---
+> impl<'a, T, F, A: Allocator> Iterator for ExtractIf<'a, T, F, A>
+1959,1962c2090,2096
+<     fn next(&mut self) -> Option<T> {
+<         while let Some(mut node) = self.it {
+<             unsafe {
+<                 self.it = node.as_ref().next;
+---
+>     fn next(&mut self) -> Option<T>
+>     {
+>         loop { //while let Some(mut node) = self.it {
+>             match self.it {
+>                 None => break,
+>                 Some(mut node) => unsafe {
+>                     self.it = (*node.as_ptr()).next; //node.as_ref().next;
+1965c2099,2100
+<                 if (self.pred)(&mut node.as_mut().element) {
+---
+> 
+>                     if call_pred(&mut self.pred, &mut node.as_mut().element) {
+1968,1969c2103,2106
+<                     return Some(Box::from_raw_in(node.as_ptr(), &self.list.alloc).element);
+<                 }
+---
+>                         let r = Some(Box::into_inner(Box::from_raw_in(node.as_ptr(), &self.list.alloc)).element);
+>                         return r
+>                     }
+>                     
+1972c2109
+< 
+---
+>         }
+2203,2204c2340
+< fn assert_covariance() {
+<     fn a<'a>(x: LinkedList<&'static str>) -> LinkedList<&'a str> {
+---
+> fn assert_covariance_a<'a>(x: LinkedList<&'static str>) -> LinkedList<&'a str> {
+2207c2343,2345
+<     fn b<'i, 'a>(x: Iter<'i, &'static str>) -> Iter<'i, &'a str> {
+---
+> 
+> #[allow(dead_code)]
+> fn assert_covariance_b<'i, 'a>(x: Iter<'i, &'static str>) -> Iter<'i, &'a str> {
+2210c2348,2350
+<     fn c<'a>(x: IntoIter<&'static str>) -> IntoIter<&'a str> {
+---
+> 
+> #[allow(dead_code)]
+> fn assert_covariance_c<'a>(x: IntoIter<&'static str>) -> IntoIter<&'a str> {
+2212d2351
+<     }
+2222c2361
+< unsafe impl<T: Sync> Send for Iter<'_, T> {}
+---
+> unsafe impl<'a, T: Sync> Send for Iter<'a, T> {}
+2225c2364
+< unsafe impl<T: Sync> Sync for Iter<'_, T> {}
+---
+> unsafe impl<'a, T: Sync> Sync for Iter<'a, T> {}
+2228c2367
+< unsafe impl<T: Send> Send for IterMut<'_, T> {}
+---
+> unsafe impl<'a, T: Send> Send for IterMut<'a, T> {}
+2231c2370
+< unsafe impl<T: Sync> Sync for IterMut<'_, T> {}
+---
+> unsafe impl<'a, T: Sync> Sync for IterMut<'a, T> {}
+2234c2373
+< unsafe impl<T: Sync, A: Allocator + Sync> Send for Cursor<'_, T, A> {}
+---
+> unsafe impl<'a, T: Sync, A: Allocator + Sync> Send for Cursor<'a, T, A> {}
+2237c2376
+< unsafe impl<T: Sync, A: Allocator + Sync> Sync for Cursor<'_, T, A> {}
+---
+> unsafe impl<'a, T: Sync, A: Allocator + Sync> Sync for Cursor<'a, T, A> {}
+2240c2379
+< unsafe impl<T: Send, A: Allocator + Send> Send for CursorMut<'_, T, A> {}
+---
+> unsafe impl<'a, T: Send, A: Allocator + Send> Send for CursorMut<'a, T, A> {}
+2243c2382
+< unsafe impl<T: Sync, A: Allocator + Sync> Sync for CursorMut<'_, T, A> {}
+---
+> unsafe impl<'a, T: Sync, A: Allocator + Sync> Sync for CursorMut<'a, T, A> {}
